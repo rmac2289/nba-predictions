@@ -27,7 +27,7 @@ This tool uses machine learning to predict NBA player statistics (Points, Reboun
 
 1. Clone the repository:
 ```bash
-git clone [repository-url]
+git clone https://github.com/rmac2289/nba-predictions.git
 cd nba-stats-predictor
 ```
 
