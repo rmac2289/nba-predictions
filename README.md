@@ -28,7 +28,7 @@ This tool uses machine learning to predict NBA player statistics (Points, Reboun
 1. Clone the repository:
 ```bash
 git clone https://github.com/rmac2289/nba-predictions.git
-cd nba-stats-predictor
+cd nba-predictions
 ```
 
 2. Install required packages:
@@ -44,7 +44,7 @@ The program provides three main commands:
 
 1. Make predictions:
 ```bash
-# Using default players (Josh Hart, Jalen Brunson, Pascal Siakam)
+# Using default players (Defined in the code)
 python main.py predict
 
 # Specify custom players
