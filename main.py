@@ -1,7 +1,7 @@
 # Imports
-from nba_api.stats.endpoints import playergamelog, teamdashboardbygeneralsplits, leaguedashteamstats, teamdashptshots, teamgamelog, boxscoretraditionalv2, leaguegamefinder
+from nba_api.stats.endpoints import playergamelog, leaguedashteamstats, teamgamelog, boxscoretraditionalv2
 from nba_api.stats.static import teams, players
-from nba_api.live.nba.endpoints import scoreboard
+from nba_api.stats.endpoints import scoreboardv2
 import pandas as pd
 import numpy as np
 from xgboost import XGBRegressor
@@ -187,19 +187,53 @@ def get_todays_matchups():
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            # Get today's date in the format required by the API
+            today = datetime.now().strftime('%Y-%m-%d')
+            
             scoreboard_data = api_call_with_retry(
-                lambda: scoreboard.ScoreBoard(timeout=60).get_dict()
+                lambda: scoreboardv2.ScoreboardV2(game_date=today).get_dict()
             )
             
-            matchups = {}
-            for game in scoreboard_data['scoreboard']['games']:
-                home_team = game['homeTeam']['teamTricode']
-                away_team = game['awayTeam']['teamTricode']
-                matchups[home_team] = away_team
-                matchups[away_team] = home_team
+            # Create ID to abbreviation mapping
+            teams_list = teams.get_teams()
+            team_id_to_abbrev = {team['id']: team['abbreviation'] 
+                               for team in teams_list}
             
-            logger.info(f"Found {len(matchups)//2} games scheduled for today")
+            matchups = {}
+            logger.info(f"\nGames found for {today}:")
+            
+            # Get games from GameHeader resultSet
+            game_headers = next(rs for rs in scoreboard_data['resultSets'] 
+                              if rs['name'] == 'GameHeader')
+            
+            # Get indices for the columns we need
+            headers = game_headers['headers']
+            home_team_idx = headers.index('HOME_TEAM_ID')
+            away_team_idx = headers.index('VISITOR_TEAM_ID')
+            game_status_idx = headers.index('GAME_STATUS_TEXT')
+            
+            # Process each game
+            for game in game_headers['rowSet']:
+                home_team_id = game[home_team_idx]
+                away_team_id = game[away_team_idx]
+                game_time = game[game_status_idx]
+                
+                # Convert IDs to abbreviations
+                home_team = team_id_to_abbrev.get(home_team_id)
+                away_team = team_id_to_abbrev.get(away_team_id)
+                
+                if home_team and away_team:
+                    matchups[home_team] = away_team
+                    matchups[away_team] = home_team
+                    logger.info(f"{away_team} @ {home_team} ({game_time})")
+                else:
+                    logger.warning(f"Could not convert IDs to abbreviations: {home_team_id} vs {away_team_id}")
+            
+            if not matchups:
+                logger.warning(f"No games found in scoreboard data for {today}")
+            
             return matchups
+            
         except Exception as e:
             logger.error(f"Error getting matchups (attempt {attempt + 1}): {e}")
             if attempt < max_retries - 1:
@@ -212,9 +246,16 @@ def get_opponent_and_home_status(player_name):
     """Returns tuple of (opponent, is_home_game) for today's game, or (None, None) if no game"""
     team = get_player_team(player_name)
     if not team:
+        logger.warning(f"Could not determine team for {player_name}")  # Debug log
         return None, None
         
+    logger.info(f"Found team {team} for {player_name}")  # Debug log
+    
     matchups = get_todays_matchups()
+    if not matchups:
+        logger.warning("No matchups returned from get_todays_matchups")  # Debug log
+        return None, None
+        
     if team in matchups:
         opponent = matchups[team]
         # Check game location
@@ -225,6 +266,8 @@ def get_opponent_and_home_status(player_name):
             elif team == away_team and opponent == home_team:
                 logger.info(f"{player_name}'s team ({team}) is away vs {opponent}")
                 return opponent, False
+    else:
+        logger.warning(f"Team {team} not found in today's matchups: {matchups}")  # Debug log
     
     logger.info(f"No game found today for {player_name}'s team ({team})")
     return None, None
@@ -428,8 +471,6 @@ def get_opponent_points_from_game(game_id, team_id):
             opp_info = [team for team in teams.get_teams() if team['id'] == opp_team_id][0]
             opp_abbr = opp_info['abbreviation']
             
-            logger.info(f"Game {game_id} (cached): {team_abbr} vs {opp_abbr}, Score: {team_data}-{opponent_data}")
-            
             return opponent_data
         except Exception as e:
             logger.error(f"Error processing cached boxscore for game {game_id}: {e}")
@@ -511,14 +552,6 @@ def get_enhanced_team_stats(team_id, season):
             'pace': np.random.normal(100.0, 2.0),  # Mean 100, SD 2
             'fg_pct_allowed': np.random.normal(0.47, 0.02)  # Mean 0.47, SD 0.02
         }
-        
-        logger.info(f"\nTeam stats for {team_name}:")
-        logger.info(f"Games Played: {result['games_played']}")
-        logger.info(f"Points Per Game: {result['points_per_game']}")
-        logger.info(f"Points Rank: {result['points_rank']}")
-        logger.info(f"Defensive Rating: {result['def_rating']}")
-        logger.info(f"Recent Points Allowed: {result['recent_pts_allowed']:.1f}")
-        logger.info(f"Recent Games Points Allowed: {recent_points_allowed}")
         
         return result
         
@@ -656,12 +689,6 @@ def prepare_features(df, season, stat_to_predict):
     df['RECENT_VS_DEF'] = df[f'{stat_to_predict}_5game_avg'] * df['OPP_DEF_RATING']
     df['REST_HOME_INTER'] = df['DAYS_SINCE_LAST_GAME'] * df['HOME']
     
-    # Print feature statistics for debugging
-    logger.info("\nFeature Statistics after preparation:")
-    for col in df.columns:
-        if col in base_features:
-            logger.info(f"{col} - Mean: {df[col].mean():.3f}, Std: {df[col].std():.3f}")
-    
     return df
 
 # Model Training Functions
@@ -675,7 +702,7 @@ def load_or_train_model(player_name, stat_to_predict, season=SEASON):
     cached_data = load_from_cache(cache_dir, filename, is_pickle=True)
     if cached_data is not None:
         return cached_data.get('model'), cached_data.get('features')
-    
+
     logger.info(f"Training new model for {player_name} ({stat_to_predict})")
     df = get_player_season_games(player_name, season)
     if df is None:
@@ -766,7 +793,6 @@ def predict_next_game(player_name, stat_to_predict):
     
     # Prepare features for prediction
     pred_features = pd.DataFrame(index=[0])
-    logger.info("\nFeature Values for Prediction:")
     
     try:
         # Set up basic features
@@ -776,25 +802,18 @@ def predict_next_game(player_name, stat_to_predict):
                 
             if feat in recent_games.columns:
                 pred_features[feat] = recent_games[feat].iloc[0]
-                logger.info(f"{feat}: {recent_games[feat].iloc[0]:.3f}")
             elif feat == 'HOME':
                 pred_features[feat] = int(is_home_game)
-                logger.info(f"{feat}: {int(is_home_game)}")
             elif feat == 'DAYS_SINCE_LAST_GAME':
                 pred_features[feat] = rest_days
-                logger.info(f"{feat}: {rest_days}")
             elif feat == 'OPP_DEF_RATING':
                 pred_features[feat] = opponent_stats['def_rating'] / 100
-                logger.info(f"{feat}: {opponent_stats['def_rating'] / 100:.3f}")
             elif feat == 'OPP_PACE':
                 pred_features[feat] = opponent_stats['pace'] / 100
-                logger.info(f"{feat}: {opponent_stats['pace'] / 100:.3f}")
             elif feat == 'OPP_RECENT_PTS_ALLOWED':
                 pred_features[feat] = opponent_stats['recent_pts_allowed'] / 100
-                logger.info(f"{feat}: {opponent_stats['recent_pts_allowed'] / 100:.3f}")
             elif feat == 'OPP_FG_PCT_ALLOWED':
                 pred_features[feat] = opponent_stats['fg_pct_allowed']
-                logger.info(f"{feat}: {opponent_stats['fg_pct_allowed']:.3f}")
         
         # Calculate interaction features
         if 'OPP_DEF_PACE' in feature_cols:
@@ -896,46 +915,66 @@ players_list = [
 ]
 
 def predict_multiple_players(player_names):
-    predictions = []
+    """Make predictions for multiple players and write to CSV in batches"""
     stats_to_predict = ['PTS', 'REB', 'AST']
     
-    # Warm up cache first
-    warmup_cache_for_players(player_names)
-    
     for player_name in player_names:
-        opponent, is_home_game = get_opponent_and_home_status(player_name)
-        
-        if not opponent:
-            logger.info(f"\nNo game found today for {player_name}")
+        try:
+            opponent, is_home_game = get_opponent_and_home_status(player_name)
+            
+            if not opponent:
+                logger.info(f"\nNo game found today for {player_name}")
+                continue
+                
+            rest_days = calculate_rest_days(player_name)
+            logger.info(f"\nPredictions for {player_name} vs {opponent}")
+            logger.info(f"Location: {'Home' if is_home_game else 'Away'}")
+            logger.info(f"Rest days: {rest_days}")
+            
+            # Get season averages
+            season_avgs = get_season_averages(player_name)
+            recent_games = get_last_10_games(player_name)
+            
+            player_prediction = {
+                'name': player_name,
+                'opponent': opponent,
+                'is_home_game': is_home_game,
+                'rest_days': rest_days,
+                'season_ppg': season_avgs.get('PTS', ''),
+                'season_rpg': season_avgs.get('REB', ''),
+                'season_apg': season_avgs.get('AST', ''),
+            }
+            
+            # Calculate last 5 game averages
+            if recent_games is not None and not recent_games.empty:
+                last_5 = recent_games.head(5)
+                player_prediction.update({
+                    'l5_ppg': round(last_5['PTS'].mean(), 1),
+                    'l5_rpg': round(last_5['REB'].mean(), 1),
+                    'l5_apg': round(last_5['AST'].mean(), 1),
+                })
+            
+            for stat in stats_to_predict:
+                logger.info(f"Predicting {stat} for {player_name}...")
+                result = predict_next_game(player_name, stat)
+                if result is not None:
+                    player_prediction[stat] = result['prediction']
+                    logger.info(f"{stat}: {result['prediction']}")
+                    logger.info(f"Season Average: {result['season_average']}")
+                else:
+                    player_prediction[stat] = None
+                    logger.error(f"Unable to predict {stat}")
+            
+            # Write single player prediction to CSV
+            write_predictions_to_csv([player_prediction])
+            logger.info(f"Successfully wrote predictions for {player_name} to CSV")
+            
+        except Exception as e:
+            logger.error(f"Error making predictions for {player_name}: {e}")
+            logger.error("Moving on to next player...")
             continue
-            
-        rest_days = calculate_rest_days(player_name)
-        logger.info(f"\nPredictions for {player_name} vs {opponent}")
-        logger.info(f"Location: {'Home' if is_home_game else 'Away'}")
-        logger.info(f"Rest days: {rest_days}")
-        
-        player_predictions = {
-            'name': player_name,
-            'opponent': opponent
-        }
-        
-        for stat in stats_to_predict:
-            logger.info(f"Predicting {stat} for {player_name}...")
-            result = predict_next_game(
-                player_name,
-                stat
-            )
-            if result is not None:
-                player_predictions[stat] = result['prediction']
-                logger.info(f"{stat}: {result['prediction']}")
-                logger.info(f"Season Average: {result['season_average']}")
-            else:
-                player_predictions[stat] = None
-                logger.error(f"Unable to predict {stat}")
-            
-        predictions.append(player_predictions)
     
-    return predictions
+    logger.info("\nCompleted all predictions")
 
 def write_predictions_to_csv(predictions, filename='predictions-tracking.csv'):
     import csv
