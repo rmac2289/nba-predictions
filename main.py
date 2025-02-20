@@ -174,7 +174,6 @@ def get_player_team(player_name):
         latest_matchup = recent_games['MATCHUP'].iloc[0]
         # Extract team abbreviation (handles both home and away games)
         team = latest_matchup.split()[0]
-        logger.info(f"Found team {team} for {player_name}")
         return team
     logger.warning(f"Could not determine team for {player_name}")
     return None
