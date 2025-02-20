@@ -212,7 +212,6 @@ def get_todays_matchups():
             for game in game_headers['rowSet']:
                 home_team_id = game[home_team_idx]
                 away_team_id = game[away_team_idx]
-                game_time = game[game_status_idx]
                 
                 # Convert IDs to abbreviations
                 home_team = team_id_to_abbrev.get(home_team_id)
@@ -489,9 +488,6 @@ def get_enhanced_team_stats(team_id, season):
         offensive_stats = load_or_fetch_league_stats(season, 'Base')
         defensive_stats = load_or_fetch_league_stats(season, 'Defense')
         
-        # Get team name for logging
-        team_info = [team for team in teams.get_teams() if team['id'] == team_id][0]
-        
         # Calculate recent points allowed from actual game results
         recent_points_allowed = []
         for idx, game in team_games.head(5).iterrows():
@@ -578,21 +574,6 @@ def prepare_features(df, season, stat_to_predict):
     """
     Prepare features with consistent filtering and calculations
     """
-    # Define base features
-    base_features = [
-        'HOME', 
-        'DAYS_SINCE_LAST_GAME',
-        'OPP_DEF_RATING', 
-        'OPP_PACE',
-        'OPP_RECENT_PTS_ALLOWED',
-        'OPP_FG_PCT_ALLOWED',
-        f'{stat_to_predict}_5game_avg',
-        f'{stat_to_predict}_weighted_avg',
-        'OPP_DEF_PACE',
-        'RECENT_VS_DEF',
-        'REST_HOME_INTER'
-    ]
-    
     # Filter for games with 20+ minutes and sort by date
     df = df[df['MIN'] >= 20].copy()
     df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'], format='%b %d, %Y')
