@@ -72,7 +72,6 @@ def load_from_cache(cache_dir, filename, is_pickle=False):
                     cached_data = json.load(f)
                     
             if cached_data.get('last_updated', '') == today:
-                logger.info(f"Using cached data from {filename}")
                 return cached_data.get('data')
         except Exception as e:
             logger.error(f"Error loading cache {filename}: {e}")
@@ -95,8 +94,6 @@ def save_to_cache(cache_dir, filename, data, is_pickle=False):
         else:
             with open(cache_file, 'w') as f:
                 json.dump(cache_data, f)
-                
-        logger.info(f"Saved data to cache {filename}")
     except Exception as e:
         logger.error(f"Error saving to cache {filename}: {e}")
 
@@ -200,7 +197,6 @@ def get_todays_matchups():
                                for team in teams_list}
             
             matchups = {}
-            logger.info(f"\nGames found for {today}:")
             
             # Get games from GameHeader resultSet
             game_headers = next(rs for rs in scoreboard_data['resultSets'] 
@@ -225,7 +221,6 @@ def get_todays_matchups():
                 if home_team and away_team:
                     matchups[home_team] = away_team
                     matchups[away_team] = home_team
-                    logger.info(f"{away_team} @ {home_team} ({game_time})")
                 else:
                     logger.warning(f"Could not convert IDs to abbreviations: {home_team_id} vs {away_team_id}")
             
@@ -329,7 +324,6 @@ def load_or_fetch_player_games(player_name, season):
         return pd.DataFrame(cached_data)
     
     # Fetch new data from API
-    logger.info(f"Fetching fresh game log for {player_name}")
     try:
         if player_name.lower() == "victor wembanyama":
             player_id = 1641705
@@ -462,14 +456,7 @@ def get_opponent_points_from_game(game_id, team_id):
     if cached_data is not None:
         try:
             boxscore = pd.DataFrame(cached_data)
-            team_data = boxscore[boxscore['TEAM_ID'] == team_id].groupby('TEAM_ID')['PTS'].sum().iloc[0]
             opponent_data = boxscore[boxscore['TEAM_ID'] != team_id].groupby('TEAM_ID')['PTS'].sum().iloc[0]
-            
-            team_info = [team for team in teams.get_teams() if team['id'] == team_id][0]
-            team_abbr = team_info['abbreviation']
-            opp_team_id = boxscore[boxscore['TEAM_ID'] != team_id]['TEAM_ID'].iloc[0]
-            opp_info = [team for team in teams.get_teams() if team['id'] == opp_team_id][0]
-            opp_abbr = opp_info['abbreviation']
             
             return opponent_data
         except Exception as e:
@@ -484,17 +471,7 @@ def get_opponent_points_from_game(game_id, team_id):
         if boxscore is not None:
             # Save to cache
             save_to_cache(cache_dir, filename, boxscore.to_dict(orient='records'))
-            
-            team_data = boxscore[boxscore['TEAM_ID'] == team_id].groupby('TEAM_ID')['PTS'].sum().iloc[0]
             opponent_data = boxscore[boxscore['TEAM_ID'] != team_id].groupby('TEAM_ID')['PTS'].sum().iloc[0]
-            
-            team_info = [team for team in teams.get_teams() if team['id'] == team_id][0]
-            team_abbr = team_info['abbreviation']
-            opp_team_id = boxscore[boxscore['TEAM_ID'] != team_id]['TEAM_ID'].iloc[0]
-            opp_info = [team for team in teams.get_teams() if team['id'] == opp_team_id][0]
-            opp_abbr = opp_info['abbreviation']
-            
-            logger.info(f"Game {game_id} (new): {team_abbr} vs {opp_abbr}, Score: {team_data}-{opponent_data}")
             
             return opponent_data
             
@@ -514,11 +491,9 @@ def get_enhanced_team_stats(team_id, season):
         
         # Get team name for logging
         team_info = [team for team in teams.get_teams() if team['id'] == team_id][0]
-        team_name = team_info['abbreviation']
         
         # Calculate recent points allowed from actual game results
         recent_points_allowed = []
-        logger.info(f"\nCalculating recent points allowed for {team_name} (ID: {team_id}):")
         for idx, game in team_games.head(5).iterrows():
             points = get_opponent_points_from_game(game['Game_ID'], team_id)
             if points is not None:
