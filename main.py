@@ -1,20 +1,24 @@
-# Imports
-from nba_api.stats.endpoints import playergamelog, leaguedashteamstats, teamgamelog, boxscoretraditionalv2
-from nba_api.stats.static import teams, players
-from nba_api.stats.endpoints import scoreboardv2
+import os
+import json
+import pickle
+import time
+import logging
+import argparse
+from datetime import datetime
+from requests.exceptions import ReadTimeout
+
 import pandas as pd
 import numpy as np
 from xgboost import XGBRegressor
 from sklearn.model_selection import cross_val_score, KFold
-import time
-from requests.exceptions import ReadTimeout
-from functools import lru_cache
-import pickle
-import os
-import json
-from datetime import datetime, timedelta
-import logging
-import argparse
+from nba_api.stats.endpoints import (
+    playergamelog,
+    leaguedashteamstats,
+    teamgamelog,
+    boxscoretraditionalv2,
+    scoreboardv2
+)
+from nba_api.stats.static import teams, players
 
 # Constants
 SEASON = '2024-25'
@@ -205,7 +209,6 @@ def get_todays_matchups():
             headers = game_headers['headers']
             home_team_idx = headers.index('HOME_TEAM_ID')
             away_team_idx = headers.index('VISITOR_TEAM_ID')
-            game_status_idx = headers.index('GAME_STATUS_TEXT')
             
             # Process each game
             for game in game_headers['rowSet']:
@@ -241,8 +244,6 @@ def get_opponent_and_home_status(player_name):
     if not team:
         logger.warning(f"Could not determine team for {player_name}")  # Debug log
         return None, None
-        
-    logger.info(f"Found team {team} for {player_name}")  # Debug log
     
     matchups = get_todays_matchups()
     if not matchups:
@@ -254,10 +255,10 @@ def get_opponent_and_home_status(player_name):
         # Check game location
         for home_team, away_team in matchups.items():
             if team == home_team and opponent == away_team:
-                logger.info(f"{player_name}'s team ({team}) is home vs {opponent}")
+                logger.info(f"{team} vs {opponent}")
                 return opponent, True
             elif team == away_team and opponent == home_team:
-                logger.info(f"{player_name}'s team ({team}) is away vs {opponent}")
+                logger.info(f"{team} @ {opponent}")
                 return opponent, False
     else:
         logger.warning(f"Team {team} not found in today's matchups: {matchups}")  # Debug log
@@ -287,28 +288,6 @@ def calculate_rest_days(player_name, game_date=None):
     logger.info(f"Rest days: {rest_days}")
     return rest_days
 
-# API Helper Functions
-def api_call_with_retry(func, max_retries=3, delay=2):
-    """Enhanced API call handler with exponential backoff"""
-    for i in range(max_retries):
-        try:
-            return func()
-        except ReadTimeout:
-            wait_time = delay * (2 ** i)
-            if i < max_retries - 1:
-                logger.warning(f"API timeout, retrying in {wait_time} seconds...")
-                time.sleep(wait_time)
-                continue
-            logger.error("Max retries reached for API call")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected API error: {e}")
-            if i < max_retries - 1:
-                time.sleep(delay)
-                continue
-            raise
-    return None
-
 # Data Loading Functions
 def load_or_fetch_player_games(player_name, season):
     """Load player games from local cache or fetch from API"""
@@ -322,9 +301,14 @@ def load_or_fetch_player_games(player_name, season):
         return pd.DataFrame(cached_data)
     
     # Fetch new data from API
+    unlisted_players = {
+        "victor wembanyama": 1641705,
+        "amen thompson": 1641708
+    }
     try:
-        if player_name.lower() == "victor wembanyama":
-            player_id = 1641705
+        lowercase_name = player_name.lower()
+        if lowercase_name in unlisted_players:
+            player_id = unlisted_players[lowercase_name]
         else:
             player_dict = players.find_players_by_full_name(player_name)[0]
             player_id = player_dict['id']
@@ -538,7 +522,7 @@ def get_enhanced_team_stats(team_id, season):
             'fg_pct_allowed': np.random.normal(0.47, 0.02)
         }
 
-def calculate_weighted_averages(df, col, weights=[0.4, 0.25, 0.20, 0.10, 0.05]):
+def calculate_weighted_averages(df, col, weights=[0.3, 0.25, 0.20, 0.15, 0.10]):
     """Calculate weighted average using the previous 5 games for each row"""
     def calc_row_weighted_avg(idx):
         # Get the previous 5 games for this specific row
@@ -592,7 +576,7 @@ def prepare_features(df, season, stat_to_predict):
                 df.loc[idx, f'{col}_5game_avg'] = df[col].iloc[idx]
         
         # Calculate weighted average for each position
-        weights = [0.35, 0.25, 0.20, 0.15, 0.05]
+        weights = [0.25, 0.22, 0.20, 0.18, 0.15]
         for idx in range(len(df)):
             prev_games = df[col].iloc[idx:idx+5]
             if len(prev_games) >= 3:
