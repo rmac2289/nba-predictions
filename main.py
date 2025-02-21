@@ -19,6 +19,7 @@ from nba_api.stats.endpoints import (
     scoreboardv2
 )
 from nba_api.stats.static import teams, players
+from players import players as active_players
 
 # Constants
 SEASON = '2024-25'
@@ -301,14 +302,10 @@ def load_or_fetch_player_games(player_name, season):
         return pd.DataFrame(cached_data)
     
     # Fetch new data from API
-    unlisted_players = {
-        "victor wembanyama": 1641705,
-        "amen thompson": 1641708
-    }
     try:
-        lowercase_name = player_name.lower()
-        if lowercase_name in unlisted_players:
-            player_id = unlisted_players[lowercase_name]
+        name = player_name.lower()
+        if name in active_players:
+            player_id = active_players[name]
         else:
             player_dict = players.find_players_by_full_name(player_name)[0]
             player_id = player_dict['id']
@@ -521,37 +518,6 @@ def get_enhanced_team_stats(team_id, season):
             'pace': np.random.normal(100.0, 2.0),
             'fg_pct_allowed': np.random.normal(0.47, 0.02)
         }
-
-def calculate_weighted_averages(df, col, weights=[0.3, 0.25, 0.20, 0.15, 0.10]):
-    """Calculate weighted average using the previous 5 games for each row"""
-    def calc_row_weighted_avg(idx):
-        # Get the previous 5 games for this specific row
-        prev_games = df.loc[idx+1:idx+5]
-        # Filter for games with 20+ minutes
-        prev_games = prev_games[prev_games['MIN'] >= 20]
-        if len(prev_games) < 3:  # Require at least 3 games
-            return None
-            
-        prev_values = prev_games[col].values
-        # Get weights for the available number of games
-        used_weights = weights[:len(prev_values)]
-        # Normalize weights to sum to 1
-        used_weights = np.array(used_weights) / sum(used_weights)
-        
-        # Calculate weighted average
-        weighted_avg = sum(w * v for w, v in zip(used_weights, prev_values))
-        
-        # Debug output
-        if idx == 0:  # Only print for the most recent calculation
-            logger.debug(f"\nWeighted average calculation for {col}:")
-            logger.debug(f"Previous values: {prev_values}")
-            logger.debug(f"Weights used: {used_weights}")
-            logger.debug(f"Weighted average: {weighted_avg:.2f}")
-        
-        return weighted_avg
-    
-    # Apply the calculation to each row
-    return df.index.map(calc_row_weighted_avg)
 
 def prepare_features(df, season, stat_to_predict):
     """
